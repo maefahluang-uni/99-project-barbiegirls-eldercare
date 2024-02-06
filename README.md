@@ -8,4 +8,3 @@ This dashboard will include statistical data on activities such as standing, sle
 
 ## Individual User Dashboard
 This dashboard will feature individual user information, daily and weekly activity summaries, indicating whether they meet the set thresholds. Additionally, it will provide notifications for prolonged or lack of activity.
-
