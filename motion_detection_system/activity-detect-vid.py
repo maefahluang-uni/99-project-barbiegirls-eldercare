@@ -1,6 +1,7 @@
 import collections
 import os
 import time
+import psutil
 import logging
 
 import cv2
@@ -16,8 +17,9 @@ logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
-private_key = os.getenv('ELDERLY_KEY')
-doc_id = os.getenv('DOC_ID')
+private_key = os.getenv("ELDERLY_KEY")
+doc_id = os.getenv("DOC_ID")
+
 
 def initialize_firestore(private_key):
     if not private_key:
@@ -31,6 +33,7 @@ def initialize_firestore(private_key):
         logging.error(f"Error initializing Firestore: {e}")
         return None
 
+
 def push_to_database(act_dict, db, doc_id):
     if not db:
         logging.error("Firestore database instance is None.")
@@ -38,17 +41,22 @@ def push_to_database(act_dict, db, doc_id):
 
     try:
         act_log = {
-            'stand': act_dict["stand"]["duration"],
-            'sit': act_dict["sit"]["duration"],
-            'sleep': act_dict["sleep"]["duration"],
-            'stand_to_sit': act_dict["stand_to_sit"]["duration"],
-            'sit_to_stand': act_dict["sit_to_stand"]["duration"],
-            'sit_to_sleep': act_dict["sit_to_sleep"]["duration"],
-            'sleep_to_sit': act_dict["sleep_to_sit"]["duration"],
-            'timestamp': firestore.SERVER_TIMESTAMP
+            "stand": act_dict["stand"]["duration"],
+            "sit": act_dict["sit"]["duration"],
+            "sleep": act_dict["sleep"]["duration"],
+            "stand_to_sit": act_dict["stand_to_sit"]["duration"],
+            "sit_to_stand": act_dict["sit_to_stand"]["duration"],
+            "sit_to_sleep": act_dict["sit_to_sleep"]["duration"],
+            "sleep_to_sit": act_dict["sleep_to_sit"]["duration"],
+            "timestamp": firestore.SERVER_TIMESTAMP,
         }
 
-        doc_ref = db.collection('patients').document(doc_id).collection('activities').document()
+        doc_ref = (
+            db.collection("patients")
+            .document(doc_id)
+            .collection("activities")
+            .document()
+        )
         doc_ref.set(act_log)
 
         # Reset activity log
@@ -61,9 +69,17 @@ def push_to_database(act_dict, db, doc_id):
     except Exception as e:
         logging.error(f"Error pushing to database: {e}")
 
+
+def monitor_memory(threshold=95):
+    memory_info = psutil.virtual_memory()
+    memory_usage = memory_info.percent
+    logging.info(f"Memory Useage: {memory_usage}%")
+    return memory_usage > threshold
+
+
 def main():
     video_path = "videos/demo-1.mp4"
-    
+
     # Firebase
     db = initialize_firestore(private_key)
     if db is None:
@@ -72,7 +88,7 @@ def main():
 
     # Initialize YOLO Model
     try:
-        model = YOLO('activity-model.pt')
+        model = YOLO("activity-model.pt")
     except Exception as e:
         logging.error(f"Error loading YOLO model: {e}")
         return
@@ -109,11 +125,7 @@ def main():
     }
 
     # Activity classes map
-    act_map = {
-        0: "stand",
-        1: "sleep",
-        2: "sit"
-    }
+    act_map = {0: "stand", 1: "sleep", 2: "sit"}
 
     while cap.isOpened():
 
@@ -131,17 +143,41 @@ def main():
         elapsed_time = frame_count / frame_rate
 
         # Display information on frame
-        cv2.putText(frame, f"Time: {elapsed_time:.2f} s", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.25, (255, 255, 255), 2)
-        cv2.putText(frame, f"Current Act: {curr}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.25, (255, 255, 255), 2)
+        cv2.putText(
+            frame,
+            f"Time: {elapsed_time:.2f} s",
+            (10, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.25,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(
+            frame,
+            f"Current Act: {curr}",
+            (10, 80),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.25,
+            (255, 255, 255),
+            2,
+        )
         i = 0
         for key, value in act_dict.items():
             if key != "prev":
-                cv2.putText(frame, f"{key}: {value['duration']} s", (10, 120 + (i * 35)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+                cv2.putText(
+                    frame,
+                    f"{key}: {value['duration']} s",
+                    (10, 120 + (i * 35)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (0, 0, 0),
+                    2,
+                )
                 i += 1
 
-        #Pushed to database every frequency seconds
+        # Pushed to database every frequency seconds
         if frame_count % (frame_rate * frequency) == 0:
-            logging.info('PUSHED TO DATABASE...')
+            logging.info("PUSHED TO DATABASE...")
             push_to_database(act_dict, db, doc_id)
 
         # Track object in frame
@@ -168,8 +204,24 @@ def main():
                     w_diff = track[-1][2] - track[-10][2]
                     h_diff = track[-1][3] - track[-10][3]
 
-                    cv2.putText(frame, f"x_diff: {x_diff:.2f}", (10, 370), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
-                    cv2.putText(frame, f"y_diff: {y_diff:.2f}", (10, 400), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+                    cv2.putText(
+                        frame,
+                        f"x_diff: {x_diff:.2f}",
+                        (10, 370),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 0, 0),
+                        2,
+                    )
+                    cv2.putText(
+                        frame,
+                        f"y_diff: {y_diff:.2f}",
+                        (10, 400),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 0, 0),
+                        2,
+                    )
 
                     if abs(y_diff) > 10 or abs(h_diff) > 10 or abs(w_diff) > 10:
                         if h > w:
@@ -188,25 +240,33 @@ def main():
                                 curr = act_map.get(activity)
                     else:
                         curr = act_map.get(activity)
-                    
+
                     # Update start time if activity just started
                     if act_dict[curr]["start_time"] is None:
                         act_dict[curr]["start_time"] = round(elapsed_time, 2)
-                
+
                 if len(track) > 30:
                     track.pop(0)
-        
+
                 # Draw trajectory on frame
                 x_values = [coord[0] for coord in track]
                 y_values = [coord[1] for coord in track]
                 combined_points = [(x, y) for x, y in zip(x_values, y_values)]
                 points = np.hstack(combined_points).astype(np.int32).reshape((-1, 1, 2))
-                cv2.polylines(frame, [points], isClosed=False, color=(230, 230, 230), thickness=10)
-        
+                cv2.polylines(
+                    frame, [points], isClosed=False, color=(230, 230, 230), thickness=10
+                )
+
         # Update duration if activity hasn't changed
-        if act_dict["prev"] is not None and act_dict[curr]["start_time"] is not None and act_dict["prev"] == curr:
-            act_dict[curr]["duration"] = round(elapsed_time - act_dict[curr]["start_time"], 2)
-        
+        if (
+            act_dict["prev"] is not None
+            and act_dict[curr]["start_time"] is not None
+            and act_dict["prev"] == curr
+        ):
+            act_dict[curr]["duration"] = round(
+                elapsed_time - act_dict[curr]["start_time"], 2
+            )
+
         act_dict["prev"] = curr
 
         annotated_frame = results[0].plot()
@@ -215,8 +275,13 @@ def main():
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
+        if monitor_memory():
+            # TODO: Notify
+            logging.critical("High memory usage detected!")
+
     cap.release()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()
