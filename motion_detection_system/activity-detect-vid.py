@@ -1,16 +1,19 @@
 import collections
 import os
-import time
 import psutil
 import logging
+import smtplib
+import time 
 
 import cv2
 import firebase_admin
-import numpy as np
 from dotenv import load_dotenv
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, messaging
 from ultralytics import YOLO
 from screeninfo import get_monitors
+
+import google.auth.transport.requests
+from google.oauth2 import service_account
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +22,9 @@ load_dotenv()
 
 private_key = os.getenv("ELDERLY_KEY")
 doc_id = os.getenv("DOC_ID")
+email = os.getenv("APP_EMAIL")
+receiver_email = os.getenv("ADMIN_EMAIL")
+app_password = os.getenv("APP_PASSWORD")
 
 
 def initialize_firestore(private_key):
@@ -34,7 +40,7 @@ def initialize_firestore(private_key):
         return None
 
 
-def push_to_database(act_dict, db, doc_id):
+def push_act_log(act_dict, db, doc_id):
     if not db:
         logging.error("Firestore database instance is None.")
         return
@@ -69,15 +75,56 @@ def push_to_database(act_dict, db, doc_id):
     except Exception as e:
         logging.error(f"Error pushing to database: {e}")
 
+def notify_admin(type):
 
-def monitor_memory(threshold=95):
-    memory_info = psutil.virtual_memory()
-    memory_usage = memory_info.percent
-    logging.info(f"Memory Useage: {memory_usage}%")
-    return memory_usage > threshold
+    # Define alert templates
+    logging.info("Notifying Admin...")
+    alerts = {
+        0: {
+            "type": "System Alert",
+            "title": "Camera Connection Issue",
+            "text": "The camera is disconnected or in use by another application. Video feed interrupted."
+        },
+        1: {
+            "type": "System Alert",
+            "title": "Camera Connection Issue",
+            "text": "Camera feed lost. Attempting to switch to backup camera."
+        },
+        2: {
+            "type": "System Warning",
+            "title": "High Resource Usage",
+            "text": "High resource usage detected. Restarting activity recognition program to avoid performance issues or system crashes."
+        },
+        3: {
+            "type": "Unknown",
+            "title": "Unknown Issue",
+            "text": "Contact Admin"
+        }
+    }
 
+    alert = alerts.get(type, alerts[3])
+    
+    alert.update({
+        "patientID": doc_id,
+    })
+
+    subject = f"{alert['type']} Test"
+    message = f"{alert['title']}: {alert['text']} \nID: {alert['patientID']}"
+    text = f"Subject:{subject}\n\n{message}"
+
+    try:
+        logging.info("Sending email...")
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        
+        server.login(email, app_password)
+        server.sendmail(email, receiver_email, text)
+        logging.info("Email sent to Admin")
+    except Exception as e:
+        logging.error(f"Error pushing to alert: {e}")
 
 def main():
+        
     video_path = "videos/demo-1.mp4"
 
     # Firebase
@@ -88,7 +135,7 @@ def main():
 
     # Initialize YOLO Model
     try:
-        model = YOLO("activity-model.pt")
+        model = YOLO("activity-model-v8n.pt")
     except Exception as e:
         logging.error(f"Error loading YOLO model: {e}")
         return
@@ -104,13 +151,18 @@ def main():
         return
 
     screen_width, screen_height = monitors[0].width, monitors[0].height
+    frame_rate, frame_count, elapsed_time = cap.get(cv2.CAP_PROP_FPS), 0, 0
+    
+    #TODO: Set variables
+    frequency, CPU_THRESH, DUR_THRESH = 5, 80.0, 600.0
 
-    frame_rate = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = 0
-    elapsed_time = 0
-    frequency = 5
-    track_hist = collections.defaultdict(lambda: [])
-    curr = None
+    track_hist = collections.defaultdict(list)
+    curr, cpu, high_usage_start, high_usage_dur = None, None, None, None
+
+
+    # Activity classes map
+    act_map = {0: "stand", 1: "sleep", 2: "sit"}
+    MAX_TRACK_HISTORY = 30
 
     # Activity log dictionary
     act_dict = {
@@ -123,9 +175,6 @@ def main():
         "sit_to_sleep": {"start_time": None, "duration": 0},
         "sleep_to_sit": {"start_time": None, "duration": 0},
     }
-
-    # Activity classes map
-    act_map = {0: "stand", 1: "sleep", 2: "sit"}
 
     while cap.isOpened():
 
@@ -152,33 +201,6 @@ def main():
             (255, 255, 255),
             2,
         )
-        cv2.putText(
-            frame,
-            f"Current Act: {curr}",
-            (10, 80),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.25,
-            (255, 255, 255),
-            2,
-        )
-        i = 0
-        for key, value in act_dict.items():
-            if key != "prev":
-                cv2.putText(
-                    frame,
-                    f"{key}: {value['duration']} s",
-                    (10, 120 + (i * 35)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (0, 0, 0),
-                    2,
-                )
-                i += 1
-
-        # Pushed to database every frequency seconds
-        if frame_count % (frame_rate * frequency) == 0:
-            logging.info("PUSHED TO DATABASE...")
-            push_to_database(act_dict, db, doc_id)
 
         # Track object in frame
         try:
@@ -204,25 +226,6 @@ def main():
                     w_diff = track[-1][2] - track[-10][2]
                     h_diff = track[-1][3] - track[-10][3]
 
-                    cv2.putText(
-                        frame,
-                        f"x_diff: {x_diff:.2f}",
-                        (10, 370),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1.0,
-                        (0, 0, 0),
-                        2,
-                    )
-                    cv2.putText(
-                        frame,
-                        f"y_diff: {y_diff:.2f}",
-                        (10, 400),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1.0,
-                        (0, 0, 0),
-                        2,
-                    )
-
                     if abs(y_diff) > 10 or abs(h_diff) > 10 or abs(w_diff) > 10:
                         if h > w:
                             if h_diff < -15 and y_diff > 10:
@@ -245,17 +248,67 @@ def main():
                     if act_dict[curr]["start_time"] is None:
                         act_dict[curr]["start_time"] = round(elapsed_time, 2)
 
-                if len(track) > 30:
-                    track.pop(0)
+                    # Pushed to database every frequency seconds
+                    # if frame_count % (frame_rate * frequency) == 0:
+                    #     logging.info("PUSHED TO DATABASE...")
+                    #     push_to_database(act_dict, db, doc_id)
 
-                # Draw trajectory on frame
-                x_values = [coord[0] for coord in track]
-                y_values = [coord[1] for coord in track]
-                combined_points = [(x, y) for x, y in zip(x_values, y_values)]
-                points = np.hstack(combined_points).astype(np.int32).reshape((-1, 1, 2))
-                cv2.polylines(
-                    frame, [points], isClosed=False, color=(230, 230, 230), thickness=10
-                )
+                    cv2.putText(
+                        frame,
+                        f"Current Act: {curr}",
+                        (10, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.25,
+                        (255, 255, 255),
+                        2,
+                    )
+
+                    i = 0
+                    for key, value in act_dict.items():
+                        if key != "prev":
+                            cv2.putText(
+                                frame,
+                                f"{key}: {value['duration']} s",
+                                (10, 120 + (i * 35)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1.0,
+                                (0, 0, 0),
+                                2,
+                            )
+                            i += 1
+
+                    cv2.putText(
+                        frame,
+                        f"x_diff: {x_diff:.2f}",
+                        (10, 370),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 0, 0),
+                        2,
+                    )
+                    cv2.putText(
+                        frame,
+                        f"y_diff: {y_diff:.2f}",
+                        (10, 400),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 0, 0),
+                        2,
+                    )
+
+                else:
+                    cv2.putText(
+                        frame,
+                        f"Calibrating...",
+                        (10, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.25,
+                        (255, 255, 255),
+                        2,
+                    )
+
+                if len(track) > MAX_TRACK_HISTORY:
+                    track.pop(0)
 
         # Update duration if activity hasn't changed
         if (
@@ -269,15 +322,25 @@ def main():
 
         act_dict["prev"] = curr
 
+        #CPU Monitoring
+        cpu = psutil.cpu_percent()
+        logging.info(f"cpu percentage: {cpu}")
+        if cpu > CPU_THRESH:
+            if high_usage_start is None:
+                high_usage_start = time.time()
+            
+            high_usage_dur = time.time() - high_usage_start
+            
+            if high_usage_dur > DUR_THRESH:
+                logging.critical("High memory usage for prolonged duration detected!")
+                notify_admin(type=2)
+                break
+
         annotated_frame = results[0].plot()
         cv2.imshow("YOLOv8 Tracking", annotated_frame)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
-
-        if monitor_memory():
-            # TODO: Notify
-            logging.critical("High memory usage detected!")
 
     cap.release()
     cv2.destroyAllWindows()
