@@ -135,7 +135,7 @@ def main():
 
     # Initialize YOLO Model
     try:
-        model = YOLO("activity-model-v8n.pt")
+        model = YOLO("yolo-Weights/activity-model-v8m.pt")
     except Exception as e:
         logging.error(f"Error loading YOLO model: {e}")
         return
@@ -245,7 +245,8 @@ def main():
                         curr = act_map.get(activity)
 
                     # Update start time if activity just started
-                    if act_dict[curr]["start_time"] is None:
+                    # NOTE: or act_dict["prev"] != curr should be used when not pushing to DB
+                    if act_dict[curr]["start_time"] is None or act_dict["prev"] != curr:
                         act_dict[curr]["start_time"] = round(elapsed_time, 2)
 
                     # Pushed to database every frequency seconds
@@ -333,7 +334,7 @@ def main():
             
             if high_usage_dur > DUR_THRESH:
                 logging.critical("High memory usage for prolonged duration detected!")
-                notify_admin(type=2)
+                # notify_admin(type=2)
                 break
 
         annotated_frame = results[0].plot()
