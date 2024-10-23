@@ -151,12 +151,12 @@ def main():
 
     # Initialize YOLO Model
     try:
-        model = YOLO("activity-model-v8n.pt")
+        model = YOLO("yolo-Weights/activity-model-v8m.pt")
     except Exception as e:
         logging.error(f"Error loading YOLO model: {e}")
         return
 
-    camera_indices = [1]
+    camera_indices = [0]
     cap = None
 
     try:
@@ -165,7 +165,7 @@ def main():
         if cap is None:
             # TODO: Notify
             logging.error("No camera available. Exiting...")
-            notify_admin(type=0)
+            # notify_admin(type=0)
             return
 
         cap.set(3, 640)  # width
@@ -200,13 +200,13 @@ def main():
             if not success:
                 # TODO: Notify
                 logging.warning("Camera feed lost, attempting to switch to backup...")
-                notify_admin(type=1)
+                # notify_admin(type=1)
                 cap.release()
                 cap = find_camera(camera_indices)
                 if cap is None:
                     # TODO: Notify
                     logging.error("No camera available. Exiting...")
-                    notify_admin(type=0)
+                    # notify_admin(type=0)
                     break
 
             elapsed_time = time.time() - start_time
@@ -262,7 +262,8 @@ def main():
                             curr = act_map.get(activity)
 
                         # Update start time if activity just started
-                        if act_dict[curr]["start_time"] == 0:
+                        # NOTE: or act_dict["prev"] != curr should be used when NOT pushing to DB
+                        if act_dict[curr]["start_time"] == 0 or act_dict["prev"] != curr:
                             act_dict[curr]["start_time"] = round(elapsed_time, 2)
 
                         # Push to DB every frequency seconds
@@ -315,12 +316,12 @@ def main():
                     logging.warning(
                         "No detection for a while, attempting to switch to backup camera..."
                     )
-                    notify_admin(type=1)
+                    # notify_admin(type=1)
                     cap.release()
                     cap = find_camera(camera_indices)
                     if cap is None:
                         logging.error("No camera available. Exiting...")
-                        notify_admin(type=0)
+                        # notify_admin(type=0)
                         break
                     last_detection_time = time.time()
 
@@ -347,7 +348,7 @@ def main():
                 
                 if high_usage_dur > DUR_THRESH:
                     logging.critical("High memory usage for prolonged duration detected!")
-                    notify_admin(type=2)
+                    # notify_admin(type=2)
                     break
 
             annotated_frame = results[0].plot()
