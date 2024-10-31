@@ -2,9 +2,10 @@ import collections
 import os
 import psutil
 import time
-from datetime import datetime 
+from datetime import datetime
 import logging
 import smtplib
+import sys
 
 import cv2
 import firebase_admin
@@ -25,7 +26,7 @@ doc_id = os.getenv("DOC_ID")
 email = os.getenv("APP_EMAIL")
 receiver_email = os.getenv("ADMIN_EMAIL")
 app_password = os.getenv("APP_PASSWORD")
-#Making request: POST https://oauth2.googleapis.com/token
+# Making request: POST https://oauth2.googleapis.com/token
 
 
 def initialize_firestore(private_key):
@@ -100,31 +101,33 @@ def notify_admin(type):
         0: {
             "type": "System Alert",
             "title": "Camera Connection Issue",
-            "text": "The camera is disconnected or in use by another application. Video feed interrupted."
+            "text": "The camera is disconnected or in use by another application. Video feed interrupted.",
         },
         1: {
             "type": "System Alert",
             "title": "Camera Connection Issue",
-            "text": "Camera feed lost. Attempting to switch to backup camera."
+            "text": "Camera feed lost. Attempting to switch to backup camera.",
         },
         2: {
             "type": "System Warning",
             "title": "High Resource Usage",
-            "text": "High resource usage detected. Restarting activity recognition program to avoid performance issues or system crashes."
+            "text": "High resource usage detected for a sustained period of time (600s). Restarting activity recognition program to avoid performance issues or system crashes.",
         },
         3: {
-            "type": "Unknown",
-            "title": "Unknown Issue",
-            "text": "Contact Admin"
-        }
+            "type": "System Alert",
+            "title": "System Initialization",
+            "text": "System is starting up.",
+        },
     }
 
     alert = alerts.get(type, alerts[3])
-    
-    alert.update({
-        "patientID": doc_id,
-        "timestamp": datetime.now(),
-    })
+
+    alert.update(
+        {
+            "patientID": doc_id,
+            "timestamp": datetime.now(),
+        }
+    )
 
     subject = f"{alert['type']}"
     message = f"{alert['title']}: {alert['text']} \ntime: {alert['timestamp']} \nID: {alert['patientID']}"
@@ -134,7 +137,7 @@ def notify_admin(type):
         logging.info("Sending email...")
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
-        
+
         server.login(email, app_password)
         server.sendmail(email, receiver_email, text)
         logging.info("Email sent to Admin")
@@ -158,6 +161,7 @@ def main():
 
     camera_indices = [0]
     cap = None
+    initial_notification = False
 
     try:
         cap = find_camera(camera_indices)
@@ -176,7 +180,6 @@ def main():
         start_time = last_detection_time = last_push_time = time.time()
         curr, cpu, high_usage_start, high_usage_dur = None, None, None, None
         CPU_THRESH, DUR_THRESH, DETECTION_TIMEOUT = 80.0, 600.0, 300.0
-
 
         # Activity classes map
         act_map = {0: "stand", 1: "sleep", 2: "sit"}
@@ -210,6 +213,11 @@ def main():
                     break
 
             elapsed_time = time.time() - start_time
+
+            if not initial_notification:
+                notify_admin(3)
+                initial_notification = True
+
 
             # Display information on frame
             cv2.putText(
@@ -245,9 +253,9 @@ def main():
 
                         if abs(y_diff) > 10 or abs(h_diff) > 10 or abs(w_diff) > 10:
                             if h > w:
-                                if h_diff < -15 and y_diff < 5:
+                                if h_diff < -15 and y_diff > 5:
                                     curr = "stand_to_sit"
-                                elif h_diff > 15 and y_diff > 5:
+                                elif h_diff > 15 and y_diff < -5:
                                     curr = "sit_to_stand"
                                 else:
                                     curr = act_map.get(activity)
@@ -278,7 +286,7 @@ def main():
                             (10, 80),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             1.25,
-                            (255, 255, 255),
+                            (0, 0, 0),
                             2,
                         )
                         i = 0
@@ -336,20 +344,22 @@ def main():
                 )
 
             act_dict["prev"] = curr
-            
-            #CPU Monitoring
+
+            # CPU Monitoring
             cpu = psutil.cpu_percent()
             logging.info(f"cpu percentage: {cpu}")
             if cpu > CPU_THRESH:
                 if high_usage_start is None:
                     high_usage_start = time.time()
-                
+
                 high_usage_dur = time.time() - high_usage_start
-                
+
                 if high_usage_dur > DUR_THRESH:
-                    logging.critical("High memory usage for prolonged duration detected!")
-                    # notify_admin(type=2)
-                    break
+                    logging.critical(
+                        "High memory usage for prolonged duration detected!"
+                    )
+                    notify_admin(type=2)
+                    os.execv(sys.executable, ["python"] + sys.argv)
 
             annotated_frame = results[0].plot()
             cv2.imshow("YOLOv8 Tracking", annotated_frame)

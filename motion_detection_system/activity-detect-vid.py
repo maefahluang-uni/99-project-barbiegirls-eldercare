@@ -245,8 +245,7 @@ def main():
                         curr = act_map.get(activity)
 
                     # Update start time if activity just started
-                    # NOTE: or act_dict["prev"] != curr should be used when not pushing to DB
-                    if act_dict[curr]["start_time"] is None or act_dict["prev"] != curr:
+                    if act_dict[curr]["start_time"] is None:
                         act_dict[curr]["start_time"] = round(elapsed_time, 2)
 
                     # Pushed to database every frequency seconds
