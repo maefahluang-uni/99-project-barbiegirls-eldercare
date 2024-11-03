@@ -45,13 +45,13 @@ def push_to_database(act_dict, db, doc_id):
         return
 
     act_log = {
-        "stand": act_dict["stand"]["duration"],
-        "sit": act_dict["sit"]["duration"],
-        "sleep": act_dict["sleep"]["duration"],
-        "stand_to_sit": act_dict["stand_to_sit"]["duration"],
-        "sit_to_stand": act_dict["sit_to_stand"]["duration"],
-        "sit_to_sleep": act_dict["sit_to_sleep"]["duration"],
-        "sleep_to_sit": act_dict["sleep_to_sit"]["duration"],
+        "stand": act_dict["stand"]["total_duration"],
+        "sit": act_dict["sit"]["total_duration"],
+        "sleep": act_dict["sleep"]["total_duration"],
+        "stand_to_sit": act_dict["stand_to_sit"]["total_duration"],
+        "sit_to_stand": act_dict["sit_to_stand"]["total_duration"],
+        "sit_to_sleep": act_dict["sit_to_sleep"]["total_duration"],
+        "sleep_to_sit": act_dict["sleep_to_sit"]["total_duration"],
         "timestamp": firestore.SERVER_TIMESTAMP,
     }
 
@@ -72,6 +72,7 @@ def push_to_database(act_dict, db, doc_id):
         if key != "prev":
             act_dict[key]["start_time"] = 0
             act_dict[key]["duration"] = 0
+            act_dict[key]["total_duration"] = 0
 
     act_dict["prev"] = None
 
@@ -176,7 +177,7 @@ def main():
         cap.set(4, 480)  # height
 
         track_hist = collections.defaultdict(list)
-        frequency, MAX_TRACK_HISTORY = 5, 30
+        frequency, MAX_TRACK_HISTORY = 60, 30
         start_time = last_detection_time = last_push_time = time.time()
         curr, cpu, high_usage_start, high_usage_dur = None, None, None, None
         CPU_THRESH, DUR_THRESH, DETECTION_TIMEOUT = 80.0, 600.0, 300.0
@@ -187,13 +188,13 @@ def main():
         # Activity log dictionary
         act_dict = {
             "prev": None,
-            "stand": {"start_time": 0, "duration": 0},
-            "sit": {"start_time": 0, "duration": 0},
-            "sleep": {"start_time": 0, "duration": 0},
-            "stand_to_sit": {"start_time": 0, "duration": 0},
-            "sit_to_stand": {"start_time": 0, "duration": 0},
-            "sit_to_sleep": {"start_time": 0, "duration": 0},
-            "sleep_to_sit": {"start_time": 0, "duration": 0},
+            "stand": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sit": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sleep": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "stand_to_sit": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sit_to_stand": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sit_to_sleep": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sleep_to_sit": {"start_time": 0, "duration": 0, "total_duration": 0},
         }
 
         while cap.isOpened():
@@ -272,6 +273,12 @@ def main():
                         # Update start time if activity just started
                         # NOTE: or act_dict["prev"] != curr should be used when NOT pushing to DB
                         if act_dict[curr]["start_time"] == 0 or act_dict["prev"] != curr:
+                            if act_dict["prev"] and act_dict["prev"] != curr:
+                                prev_act = act_dict["prev"]
+                                elapsed_duration = round(elapsed_time - act_dict[prev_act]["start_time"])
+                                act_dict[prev_act]["total_duration"] += elapsed_duration
+                                act_dict[prev_act]["duration"] = 0  # Reset previous activity duration
+                                act_dict[prev_act]["start_time"] = 0  # Reset start time
                             act_dict[curr]["start_time"] = round(elapsed_time, 2)
 
                         # Push to DB every frequency seconds
@@ -294,7 +301,7 @@ def main():
                             if key != "prev":
                                 cv2.putText(
                                     frame,
-                                    f"{key}: {value['duration']} s",
+                                    f"{key}: {value['duration']} s \ {value['total_duration']} s ",
                                     (10, 120 + (i * 35)),
                                     cv2.FONT_HERSHEY_SIMPLEX,
                                     1.0,
@@ -359,7 +366,11 @@ def main():
                         "High memory usage for prolonged duration detected!"
                     )
                     notify_admin(type=2)
-                    os.execv(sys.executable, ["python"] + sys.argv)
+                    cap.release()
+                    try: 
+                        os.execv(sys.executable, ["python"] + sys.argv)
+                    except Exception as e:
+                        logging.error(f"Error restarting script: {e}")
 
             annotated_frame = results[0].plot()
             cv2.imshow("YOLOv8 Tracking", annotated_frame)

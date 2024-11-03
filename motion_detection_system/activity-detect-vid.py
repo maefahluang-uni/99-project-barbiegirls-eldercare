@@ -1,9 +1,11 @@
 import collections
+from datetime import datetime
 import os
+import sys
 import psutil
 import logging
 import smtplib
-import time 
+import time
 
 import cv2
 import firebase_admin
@@ -40,20 +42,20 @@ def initialize_firestore(private_key):
         return None
 
 
-def push_act_log(act_dict, db, doc_id):
+def push_to_database(act_dict, db, doc_id):
     if not db:
         logging.error("Firestore database instance is None.")
         return
 
     try:
         act_log = {
-            "stand": act_dict["stand"]["duration"],
-            "sit": act_dict["sit"]["duration"],
-            "sleep": act_dict["sleep"]["duration"],
-            "stand_to_sit": act_dict["stand_to_sit"]["duration"],
-            "sit_to_stand": act_dict["sit_to_stand"]["duration"],
-            "sit_to_sleep": act_dict["sit_to_sleep"]["duration"],
-            "sleep_to_sit": act_dict["sleep_to_sit"]["duration"],
+            "stand": act_dict["stand"]["total_duration"],
+            "sit": act_dict["sit"]["total_duration"],
+            "sleep": act_dict["sleep"]["total_duration"],
+            "stand_to_sit": act_dict["stand_to_sit"]["total_duration"],
+            "sit_to_stand": act_dict["sit_to_stand"]["total_duration"],
+            "sit_to_sleep": act_dict["sit_to_sleep"]["total_duration"],
+            "sleep_to_sit": act_dict["sleep_to_sit"]["total_duration"],
             "timestamp": firestore.SERVER_TIMESTAMP,
         }
 
@@ -70,10 +72,12 @@ def push_act_log(act_dict, db, doc_id):
             if key != "prev":
                 act_dict[key]["start_time"] = None
                 act_dict[key]["duration"] = 0
+                act_dict[key]["total_duration"] = 0
 
         act_dict["prev"] = None
     except Exception as e:
         logging.error(f"Error pushing to database: {e}")
+
 
 def notify_admin(type):
 
@@ -96,17 +100,20 @@ def notify_admin(type):
             "text": "High resource usage detected. Restarting activity recognition program to avoid performance issues or system crashes."
         },
         3: {
-            "type": "Unknown",
-            "title": "Unknown Issue",
-            "text": "Contact Admin"
-        }
+            "type": "System Alert",
+            "title": "System Initialization",
+            "text": "System is starting up.",
+        },
     }
 
     alert = alerts.get(type, alerts[3])
-    
-    alert.update({
-        "patientID": doc_id,
-    })
+
+    alert.update(
+        {
+            "patientID": doc_id,
+            "timestamp": datetime.now(),
+        }
+    )
 
     subject = f"{alert['type']} Test"
     message = f"{alert['title']}: {alert['text']} \nID: {alert['patientID']}"
@@ -116,15 +123,16 @@ def notify_admin(type):
         logging.info("Sending email...")
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
-        
+
         server.login(email, app_password)
         server.sendmail(email, receiver_email, text)
         logging.info("Email sent to Admin")
     except Exception as e:
         logging.error(f"Error pushing to alert: {e}")
 
+
 def main():
-        
+
     video_path = "videos/demo-1.mp4"
 
     # Firebase
@@ -152,13 +160,12 @@ def main():
 
     screen_width, screen_height = monitors[0].width, monitors[0].height
     frame_rate, frame_count, elapsed_time = cap.get(cv2.CAP_PROP_FPS), 0, 0
-    
-    #TODO: Set variables
-    frequency, CPU_THRESH, DUR_THRESH = 5, 80.0, 600.0
+
+    # TODO: Set variables
+    frequency, CPU_THRESH, DUR_THRESH = 60, 80.0, 600.0
 
     track_hist = collections.defaultdict(list)
     curr, cpu, high_usage_start, high_usage_dur = None, None, None, None
-
 
     # Activity classes map
     act_map = {0: "stand", 1: "sleep", 2: "sit"}
@@ -166,15 +173,15 @@ def main():
 
     # Activity log dictionary
     act_dict = {
-        "prev": None,
-        "stand": {"start_time": None, "duration": 0},
-        "sit": {"start_time": None, "duration": 0},
-        "sleep": {"start_time": None, "duration": 0},
-        "stand_to_sit": {"start_time": None, "duration": 0},
-        "sit_to_stand": {"start_time": None, "duration": 0},
-        "sit_to_sleep": {"start_time": None, "duration": 0},
-        "sleep_to_sit": {"start_time": None, "duration": 0},
-    }
+            "prev": None,
+            "stand": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sit": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sleep": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "stand_to_sit": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sit_to_stand": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sit_to_sleep": {"start_time": 0, "duration": 0, "total_duration": 0},
+            "sleep_to_sit": {"start_time": 0, "duration": 0, "total_duration": 0},
+        }
 
     while cap.isOpened():
 
@@ -245,8 +252,14 @@ def main():
                         curr = act_map.get(activity)
 
                     # Update start time if activity just started
-                    if act_dict[curr]["start_time"] is None:
-                        act_dict[curr]["start_time"] = round(elapsed_time, 2)
+                    if act_dict[curr]["start_time"] == 0 or act_dict["prev"] != curr:
+                            if act_dict["prev"] and act_dict["prev"] != curr:
+                                prev_act = act_dict["prev"]
+                                elapsed_duration = round(elapsed_time - act_dict[prev_act]["start_time"])
+                                act_dict[prev_act]["total_duration"] += elapsed_duration
+                                act_dict[prev_act]["duration"] = 0  # Reset previous activity duration
+                                act_dict[prev_act]["start_time"] = 0  # Reset start time
+                            act_dict[curr]["start_time"] = round(elapsed_time, 2)
 
                     # Pushed to database every frequency seconds
                     # if frame_count % (frame_rate * frequency) == 0:
@@ -268,7 +281,7 @@ def main():
                         if key != "prev":
                             cv2.putText(
                                 frame,
-                                f"{key}: {value['duration']} s",
+                                f"{key}: {value['duration']} s / {value['total_duration']} s ",
                                 (10, 120 + (i * 35)),
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 1.0,
@@ -322,19 +335,22 @@ def main():
 
         act_dict["prev"] = curr
 
-        #CPU Monitoring
+        # CPU Monitoring
         cpu = psutil.cpu_percent()
         logging.info(f"cpu percentage: {cpu}")
         if cpu > CPU_THRESH:
             if high_usage_start is None:
                 high_usage_start = time.time()
-            
+
             high_usage_dur = time.time() - high_usage_start
-            
+
             if high_usage_dur > DUR_THRESH:
                 logging.critical("High memory usage for prolonged duration detected!")
-                # notify_admin(type=2)
-                break
+                cap.release()
+                try: 
+                    os.execv(sys.executable, ["python"] + sys.argv)
+                except Exception as e:
+                    logging.error(f"Error restarting script: {e}")
 
         annotated_frame = results[0].plot()
         cv2.imshow("YOLOv8 Tracking", annotated_frame)
