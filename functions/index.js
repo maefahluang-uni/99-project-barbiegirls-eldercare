@@ -15,121 +15,59 @@ const nodemailer = require('nodemailer');
 const { Timestamp } = require('firebase-admin/firestore');
 admin.initializeApp();
 
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const MAX_DELAY = 60000; // 1 minute
 
-
-/*exports.checkHeartbeatContinuity = functions.pubsub.schedule('every 1 minutes').onRun(async (context) => {
-    console.log('Starting heartbeat check...');
+// Function to send heartbeat data
+exports.checkForDelayedActivities = functions.pubsub.schedule('every 1 minutes').onRun(async (context) => {
     const now = Date.now();
-    const cutoff = now - 10000; // 10 seconds cutoff
-    const emailRecipient = "kunyarat.may12@gmail.com";
-    
-    try {
-        // Query Firestore for documents older than the cutoff time
-        console.log('Querying Firestore for activities older than cutoff time...');
-        const snapshot = await admin.firestore().collection('patients').doc().collection('activities')
-            .where('timestamp', '<', cutoff)
-            .get();
-
-        console.log(`Query returned ${snapshot.size} documents.`);
-        
-        if (!snapshot.empty) {
-            let missingHeartbeats = [];
-            
-            snapshot.forEach((doc) => {
-                const data = doc.data();
-                missingHeartbeats.push(data.deviceId || doc.id);
-                console.log(`Missing heartbeat for device: ${data.deviceId || doc.id}`);
-            });
-
-            if (missingHeartbeats.length > 0) {
-                console.log('Sending email notification...');
-                await sendEmailNotification(missingHeartbeats, emailRecipient);
-                console.log('Email notification sent successfully.');
-            }
-        } else {
-            console.log('No missing heartbeats detected within the cutoff time.');
-        }
-    } catch (error) {
-        console.error('Error checking heartbeat continuity:', error);
-    }
-
-    console.log('Heartbeat check completed.');
-    return null;
-});
-
-
-// Function to send email notification
-async function sendEmailNotification(missingHeartbeats, emailRecipient) {
-    const mailOptions = {
-        from: 'Tester1.heartbeat@gmail.com',
-        to: emailRecipient,
-        subject: 'Alert: Missing Heartbeat Detected',
-        text: `The following devices have not sent a heartbeat within the last 10 seconds:\n\n${missingHeartbeats.join('\n')}`,
-        html: `<p>The following devices have not sent a heartbeat within the last 10 seconds:</p><ul>${missingHeartbeats.map(deviceId => `<li>${deviceId}</li>`).join('')}</ul>`,
-    };
+    const oneMinuteInMillis = 60000; // 1 minute in milliseconds
+  
 
     try {
-        await transporter.sendMail(mailOptions);
-        console.log('Email notification sent to:', emailRecipient);
-    } catch (error) {
-        console.error('Error sending email notification:', error);
-    }
-}
-
-*/
-
-exports.HeartbeatsDetecting = functions.pubsub.schedule('every 1 minutes').onRun(async (context) => {
-    console.log('Starting heartbeat check...');
-    const now = Date.now();
-    const cutoffTimestamp = Timestamp.fromMillis(now - 10000); // Convert cutoff time to Firestore Timestamp
-
-    try {
-        // Query Firestore for activities with timestamp older than cutoff
-        console.log('Querying Firestore for activities older than cutoff time...');
+        // Retrieve the most recent activity document from all patient activities
         const snapshot = await admin.firestore()
-            .collection('patients')
-            .doc() // Ensure you specify the correct document ID if needed
-            .collection('activities')
-            .where('timestamp', '<', cutoffTimestamp)
+    
+            .collectionGroup('activities') // Using collectionGroup to query all activities subcollections
+            .orderBy('timestamp', 'desc') // Order by timestamp descending
+            .limit(1) // Get only the newest document
             .get();
+            console.log(snapshot);
 
-        console.log(`Query returned ${snapshot.size} documents.`);
 
-        if (!snapshot.empty) {
-            let missingHeartbeats = [];
-            snapshot.forEach((doc) => {
-                const data = doc.data();
-                const deviceId = data.deviceId || doc.id;
+        if (snapshot.empty) {
+            console.log('No activities found.');
+            return;
+        }
 
-                missingHeartbeats.push(deviceId);
-                console.log(`Missing heartbeat detected for device: ${deviceId}`);
+        // Get the most recent document
+        const latestDoc = snapshot.docs[0];
+        const data = latestDoc.data();
+        const timestamp = data.timestamp.toMillis(); // Convert Firestore Timestamp to milliseconds
+        const timeGap = now - timestamp; // Calculate the gap in milliseconds
 
-                // Add a document to the heartbeat collection for each missing device
-                admin.firestore().collection('heartbeat').add({
-                    deviceId: deviceId,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                });
+        console.log(`Latest Document ID: ${latestDoc.id}, Timestamp: ${new Date(timestamp).toISOString()}, Time Gap: ${timeGap / 1000} seconds`);
+
+        // Check if the gap is greater than 1 minute
+        if (timeGap > oneMinuteInMillis) {
+            console.log(`Alert! Latest Document ID ${latestDoc.id} has not sent data for more than 1 minute.`);
+            
+            // Create a new document in the heartbeat collection to log the alert
+            await admin.firestore().collection('heartbeat').add({
+                //deviceId: data.deviceId || latestDoc.id, // Store the device ID or use document ID
+                //timestamp: admin.firestore.FieldValue.serverTimestamp(), // Current time of the alert
+                alertMessage: 'No data received for more than 1 minute since last activity.'
             });
+            console.log("Heartbeat document successfully created.");
         } else {
-            console.log('No missing heartbeats detected within the cutoff time.');
+            console.log('Data is being received within the acceptable timeframe.');
         }
     } catch (error) {
-        console.error('Error checking heartbeat continuity:', error);
+        console.error('Error checking for delayed activities:', error);
     }
 
-    console.log('Heartbeat check completed.');
     return null;
 });
-
-const mockContext = {
-    eventId: '123456',
-    eventType: 'google.pubsub.topic.publish',
-    timestamp: Date.now(),
-    // Add other properties as needed to simulate your context
-};
-
-
-
 
 
 //send message to email function 
@@ -149,6 +87,7 @@ console.log('Configured Email Username:', transporter.options.auth.user);
 const emailRecipient = "kunyarat.may12@gmail.com";
 
 exports.sendEmailNotification = functions.firestore
+
     .document('heartbeat/{heartbeatId}')
     .onCreate(async (snap, context) => {
         const data = snap.data();
@@ -158,8 +97,8 @@ exports.sendEmailNotification = functions.firestore
             from: 'Tester1.heartbeat@gmail.com',
             to: emailRecipient,
             subject: 'Alert: Missing Data Detected',
-            text: `The device has not sent any data within the last 10 seconds.`,
-            html: `<p>The device has not sent any data within the last 10 seconds.</p>`
+            text: `The device has not sent any data within the last 1 minute.`,
+            html: `<p>The device has not sent any data within the last 1 minute.</p>`
         };
 
         try {
