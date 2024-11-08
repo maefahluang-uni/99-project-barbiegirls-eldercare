@@ -17,12 +17,8 @@ DOC_ID="firestore-doc-id"
 
 7. Create a Python virtual environment and activate it.
 
-8. Install the necessary libraries in order for the program to function properly. Install one library at a time by executing the following code (without $) in the terminal:
-8.1 $ pip install opencv-python
-8.2 $ pip install firebase_admin
-8.3 $ pip install screeninfo
-8.4 $ pip install ultralytics
-8.5 $ pip install python-dotenv
+8. Install the necessary libraries in order for the program to function properly by executing the following code (without $) in the terminal:
+$ pip install opencv-python firebase_admin screeninfo ultralytics python-dotenv
 
 9. (Optional) Run the 'camera-check.py' script to check your webcam port. If you have more than 1 webcam connected to your computer, make sure to edit the camera port in the 'activity-detect-cam.py' file to correspond to the port you want the script to capture the video frames from.
 9.1 If the 'activity-detect-cam.py' script fails to launch with the error "Error: Could not open video capture.", you may try removing ', cv2.CAP_DSHOW' and try executing the script again.
