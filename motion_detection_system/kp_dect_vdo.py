@@ -3,7 +3,7 @@ import cv2
 import os
 import math
 
-cap = cv2.VideoCapture(0)  #
+cap = cv2.VideoCapture("videos/theravision-clip.mov")  #
 # cap.set(3, 640)
 # cap.set(4, 480)
 
